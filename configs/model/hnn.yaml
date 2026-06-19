@@ -1,0 +1,8 @@
+latent_dim: 64
+steps: 4
+dt: 0.05
+decoder_hidden_dim: 64
+hamiltonian_hidden_dim: 256
+lr: 0.001
+epochs: 100
+patience: 3
