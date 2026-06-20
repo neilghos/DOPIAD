@@ -1,0 +1,21 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Training artifacts
+outputs/
+*.pt
+*.pth
+*.ckpt
+
+# Logs
+*.log
+
+# OS / editor junk
+.DS_Store
+.vscode/
