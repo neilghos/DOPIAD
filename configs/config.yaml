@@ -3,6 +3,7 @@ defaults:
   - data: swat
   - model: hnn
   - experiment: all
+  - scorer: default
 
 seed: 42
 device: cuda

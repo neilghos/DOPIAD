@@ -21,6 +21,7 @@ from data.smap import load_smap_compact
 from data.swat import load_swat_compact
 from Models.hnn import HNNBranch
 from router import route_features
+from scorer import score_model_reconstructions
 from tsb_metrics import calculate_tsb_metrics
 from seedmanager import set_seed
 
@@ -131,43 +132,6 @@ def run_val_epoch(model: HNNBranch, loader: DataLoader, device: torch.device, ep
     return float(np.mean(losses)) if losses else float('inf')
 
 
-def tail_stitch_window_scores(window_scores: np.ndarray, starts: np.ndarray, total_len: int, window_size: int, stride: int) -> np.ndarray:
-    scores = np.zeros((total_len,), dtype=np.float32)
-    counts = np.zeros((total_len,), dtype=np.float32)
-    prev_start = None
-    for i, start in enumerate(starts):
-        start = int(start)
-        end = min(start + window_size, total_len)
-        if end <= start:
-            prev_start = start
-            continue
-        full_window = prev_start is None or (start - prev_start > stride) or (stride >= window_size)
-        slice_start = start if full_window else max(start, end - stride)
-        if slice_start >= end:
-            prev_start = start
-            continue
-        offset = slice_start - start
-        slice_len = end - slice_start
-        scores[slice_start:end] += window_scores[i, offset:offset + slice_len]
-        counts[slice_start:end] += 1.0
-        prev_start = start
-    return scores / np.maximum(counts, 1.0)
-
-
-def reconstruct_test_windows(model: HNNBranch, test_loader: DataLoader, device: torch.device):
-    model.eval()
-    window_errs = []
-    starts = []
-    bar = tqdm(test_loader, desc='Test reconstruct', unit='batch')
-    for batch in bar:
-        phy = batch['phy'].to(device)
-        _, recon = model(phy)
-        err = torch.mean((phy - recon) ** 2, dim=-1)
-        window_errs.append(err.detach().cpu().numpy().astype(np.float32))
-        starts.append(batch['window_index'].cpu().numpy().astype(np.int64))
-    return np.concatenate(window_errs, axis=0), np.concatenate(starts, axis=0)
-
-
 @hydra.main(version_base=None, config_path='configs', config_name='config')
 def main(cfg: DictConfig) -> None:
     set_seed(int(cfg.seed))
@@ -199,6 +163,7 @@ def main(cfg: DictConfig) -> None:
     print(f'entity_id: {prepared.entity_id}')
     print(f'sensor_mode: {cfg.experiment.sensor_mode if "experiment" in cfg else "all"}')
     print(f'input_dim: {input_dim}')
+    print(f'scorer_mode: {cfg.scorer.mode}')
     print(f'train_windows: {len(train_ds)}')
     print(f'val_windows: {len(val_ds)}')
     print(f'test_windows: {len(test_ds)}')
@@ -230,19 +195,20 @@ def main(cfg: DictConfig) -> None:
         model.load_state_dict(state['model_state_dict'])
         print(f'Loaded best model from epoch {state.get("epoch", -1)} with val_mse={state.get("best_val_mse", float("nan")):.6f}')
 
-    window_scores, starts = reconstruct_test_windows(model, test_loader, device)
-    point_scores = tail_stitch_window_scores(
-        window_scores=window_scores,
-        starts=starts,
-        total_len=len(prepared.test_point_labels),
+    scored = score_model_reconstructions(
+        model=model,
+        test_loader=test_loader,
+        device=device,
+        labels=prepared.test_point_labels,
         window_size=int(cfg.data.window_size),
-        stride=int(cfg.data.test_stride),
+        test_stride=int(cfg.data.test_stride),
+        mode=str(cfg.scorer.mode),
     )
-    metrics = calculate_tsb_metrics(point_scores, prepared.test_point_labels)
+    metrics = calculate_tsb_metrics(scored.point_scores, scored.aligned_labels)
 
     print(f'best_epoch: {best_epoch}')
-    print(f'window_scores: {tuple(window_scores.shape)}')
-    print(f'point_scores: {tuple(point_scores.shape)}')
+    print(f'window_scores: {tuple(scored.window_scores.shape)}')
+    print(f'point_scores: {tuple(scored.point_scores.shape)}')
     print('metrics:')
     for key in ['auc', 'prauc', 'p_best', 'r_best', 'f1_best', 'vusaucc', 'vuspr', 'aff_p', 'aff_r', 'aff1']:
         print(f'  {key}: {metrics[key]:.6f}')
