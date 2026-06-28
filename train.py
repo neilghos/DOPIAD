@@ -16,6 +16,8 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from data.loader import HNNCompactEntity, build_hnn_datasets, standardize_train_test
+from data.msl import load_msl_compact
+from data.psm import load_psm_compact
 from data.smd import load_smd_compact
 from data.smap import load_smap_compact
 from data.swat import load_swat_compact
@@ -31,6 +33,10 @@ DISCRETE_UNIQUE_THRESHOLD = 25
 
 
 def load_entity(cfg: DictConfig):
+    if cfg.data.name.upper() == 'MSL':
+        return load_msl_compact(cfg.data.data_root)
+    if cfg.data.name.upper() == 'PSM':
+        return load_psm_compact(cfg.data.data_root)
     if cfg.data.name.upper() == 'SMD':
         return load_smd_compact(cfg.data.data_root)
     if cfg.data.name.upper() == 'SMAP':

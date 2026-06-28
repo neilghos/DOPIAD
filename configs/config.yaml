@@ -1,8 +1,8 @@
 defaults:
   - _self_
-  - data: swat
+  - data: smap
   - model: hnn
-  - experiment: all
+  - experiment: correlated
   - scorer: default
 
 seed: 42

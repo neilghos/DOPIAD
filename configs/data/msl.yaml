@@ -1,5 +1,5 @@
-name: SWAT
-data_root: /data/SWAT
+name: MSL
+data_root: /home/utsab/Data/MSL
 window_size: 64
 stride: 2
 test_stride: 1
@@ -8,4 +8,3 @@ scaler_mode: standard
 mask_rates: [0.05, 0.15, 0.30, 0.50]
 train_batch_size: 128
 eval_batch_size: 64
-input_size: 51

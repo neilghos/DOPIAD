@@ -19,3 +19,5 @@ outputs/
 # OS / editor junk
 .DS_Store
 .vscode/
+/score_cache
+/sweep_hnn_widths.py

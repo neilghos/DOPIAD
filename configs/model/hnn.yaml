@@ -1,13 +1,7 @@
 latent_dim: 128
 steps: 4
 dt: 0.05
-rollout_mode: mid_bidirectional
-projector_mode: none
-projector_dim: 128
-masking_mode: "off"
-mask_position: pre_projector
-mask_loss_mode: masked_only
-decoder_hidden_dim: 64
+decoder_hidden_dim: 256
 hamiltonian_hidden_dim: 128
 lr: 0.001
 epochs: 100
