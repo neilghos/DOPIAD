@@ -1,0 +1,21 @@
+{
+  "best_epoch": 7,
+  "dataset": "SWAT",
+  "sensor_mode": "correlated",
+  "decoder_type": "linear_baseline",
+  "aux_loss_variant": "none",
+  "scorer_mode": "endpoint_stitch",
+  "metrics": {
+    "auc": 0.8341705863649082,
+    "prauc": 0.7190827918012891,
+    "p_best": 0.991861174897538,
+    "r_best": 0.6309609659584697,
+    "f1_best": 0.7712806835129283,
+    "vusaucc": 0.7936492099316386,
+    "vuspr": 0.6168959515337068,
+    "aff_p": 0.6220063177101931,
+    "aff_r": 0.9445505059569418,
+    "aff1": 0.7500735028893071,
+    "sliding_window": 896.0
+  }
+}

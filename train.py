@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 import hydra
 import numpy as np
 import torch
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -23,13 +25,12 @@ from data.smap import load_smap_compact
 from data.swat import load_swat_compact
 from Models.hnn import HNNBranch
 from router import route_features
-from scorer import score_model_reconstructions
+from scorer import save_score_cache, score_model_reconstructions
 from tsb_metrics import calculate_tsb_metrics
 from seedmanager import set_seed
 
 
 DISCRETE_UNIQUE_THRESHOLD = 25
-
 
 
 def load_entity(cfg: DictConfig):
@@ -47,8 +48,6 @@ def load_entity(cfg: DictConfig):
             input_size=int(cfg.data.get('input_size', 51)),
         )
     raise ValueError(f"Unsupported dataset: {cfg.data.name}")
-
-
 
 
 def select_entity_by_sensor_mode(cfg: DictConfig, entity: HNNCompactEntity) -> HNNCompactEntity:
@@ -91,6 +90,7 @@ def select_entity_by_sensor_mode(cfg: DictConfig, entity: HNNCompactEntity) -> H
         test_labels=entity.test_labels,
     )
 
+
 def build_model(cfg: DictConfig, input_dim: int) -> HNNBranch:
     return HNNBranch(
         input_dim=input_dim,
@@ -100,6 +100,7 @@ def build_model(cfg: DictConfig, input_dim: int) -> HNNBranch:
         dt=cfg.model.dt,
         hamiltonian_hidden_dim=cfg.model.hamiltonian_hidden_dim,
         decoder_hidden_dim=cfg.model.decoder_hidden_dim,
+        decoder_type=str(cfg.model.decoder_type),
     )
 
 
@@ -109,33 +110,39 @@ def reconstruction_loss(anchor: torch.Tensor, recon: torch.Tensor) -> torch.Tens
 
 def run_train_epoch(model: HNNBranch, loader: DataLoader, optimizer: torch.optim.Optimizer, device: torch.device, epoch_idx: int, total_epochs: int) -> float:
     model.train()
-    losses = []
+    recon_loss_sum = 0.0
+    total_examples = 0
     bar = tqdm(loader, desc=f'Train {epoch_idx + 1}/{total_epochs}', unit='batch')
     for batch in bar:
         phy_anchor = batch['phy_anchor'].to(device)
+        batch_size = int(phy_anchor.shape[0])
         optimizer.zero_grad(set_to_none=True)
         _, recon = model(phy_anchor)
         loss = reconstruction_loss(phy_anchor, recon)
         loss.backward()
         optimizer.step()
         loss_val = float(loss.detach().cpu().item())
-        losses.append(loss_val)
+        recon_loss_sum += loss_val * batch_size
+        total_examples += batch_size
         bar.set_postfix({'recon': f'{loss_val:.6f}'})
-    return float(np.mean(losses)) if losses else float('inf')
+    return (recon_loss_sum / total_examples) if total_examples else float('inf')
 
 
 def run_val_epoch(model: HNNBranch, loader: DataLoader, device: torch.device, epoch_idx: int, total_epochs: int) -> float:
     model.eval()
-    losses = []
+    recon_loss_sum = 0.0
+    total_examples = 0
     bar = tqdm(loader, desc=f'Val   {epoch_idx + 1}/{total_epochs}', unit='batch')
     for batch in bar:
         phy_anchor = batch['phy_anchor'].to(device)
+        batch_size = int(phy_anchor.shape[0])
         _, recon = model(phy_anchor)
         loss = reconstruction_loss(phy_anchor, recon)
         loss_val = float(loss.detach().cpu().item())
-        losses.append(loss_val)
+        recon_loss_sum += loss_val * batch_size
+        total_examples += batch_size
         bar.set_postfix({'mse': f'{loss_val:.6f}'})
-    return float(np.mean(losses)) if losses else float('inf')
+    return (recon_loss_sum / total_examples) if total_examples else float('inf')
 
 
 @hydra.main(version_base=None, config_path='configs', config_name='config')
@@ -169,6 +176,7 @@ def main(cfg: DictConfig) -> None:
     print(f'entity_id: {prepared.entity_id}')
     print(f'sensor_mode: {cfg.experiment.sensor_mode if "experiment" in cfg else "all"}')
     print(f'input_dim: {input_dim}')
+    print(f'decoder_type: {cfg.model.decoder_type}')
     print(f'scorer_mode: {cfg.scorer.mode}')
     print(f'train_windows: {len(train_ds)}')
     print(f'val_windows: {len(val_ds)}')
@@ -181,11 +189,16 @@ def main(cfg: DictConfig) -> None:
     ckpt_path = Path('best_model.pt')
 
     for epoch in range(int(cfg.model.epochs)):
-        train_loss = run_train_epoch(model, train_loader, optimizer, device, epoch, int(cfg.model.epochs))
-        val_loss = run_val_epoch(model, val_loader, device, epoch, int(cfg.model.epochs))
-        print(f'Epoch {epoch + 1}: train_recon={train_loss:.6f} val_mse={val_loss:.6f} best_val={best_val:.6f}')
-        if val_loss < best_val:
-            best_val = val_loss
+        train_recon = run_train_epoch(model, train_loader, optimizer, device, epoch, int(cfg.model.epochs))
+        val_mse = run_val_epoch(model, val_loader, device, epoch, int(cfg.model.epochs))
+        print(
+            f"Epoch {epoch + 1}: "
+            f"train_recon={train_recon:.6f} "
+            f"val_mse={val_mse:.6f} "
+            f"best_val={best_val:.6f}"
+        )
+        if val_mse < best_val:
+            best_val = val_mse
             best_epoch = epoch + 1
             wait = 0
             torch.save({'model_state_dict': model.state_dict(), 'epoch': best_epoch, 'best_val_mse': best_val, 'cfg': OmegaConf.to_container(cfg, resolve=True)}, ckpt_path)
@@ -218,6 +231,39 @@ def main(cfg: DictConfig) -> None:
     print('metrics:')
     for key in ['auc', 'prauc', 'p_best', 'r_best', 'f1_best', 'vusaucc', 'vuspr', 'aff_p', 'aff_r', 'aff1']:
         print(f'  {key}: {metrics[key]:.6f}')
+
+    run_metrics = {
+        'best_epoch': int(best_epoch),
+        'dataset': str(cfg.data.name),
+        'sensor_mode': str(cfg.experiment.sensor_mode if 'experiment' in cfg else 'all'),
+        'decoder_type': str(cfg.model.decoder_type),
+        'scorer_mode': str(cfg.scorer.mode),
+        'metrics': {key: float(metrics[key]) for key in metrics},
+    }
+    output_dir = Path(HydraConfig.get().runtime.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = output_dir / 'run_metrics.json'
+    with metrics_path.open('w') as f:
+        json.dump(run_metrics, f, indent=2)
+    print(f'run_metrics_path: {metrics_path}')
+
+    score_cache_path = output_dir / 'score_cache.npz'
+    save_score_cache(
+        score_cache_path,
+        window_scores=scored.window_scores,
+        starts=scored.starts,
+        labels=prepared.test_point_labels,
+        window_size=int(cfg.data.window_size),
+        test_stride=int(cfg.data.test_stride),
+        run_name=output_dir.name,
+        dataset=str(cfg.data.name),
+        entity_id=prepared.entity_id,
+        metadata={
+            'decoder_type': str(cfg.model.decoder_type),
+            'scorer_mode': str(cfg.scorer.mode),
+        },
+    )
+    print(f'score_cache_path: {score_cache_path}')
 
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 latent_dim: 128
 steps: 4
 dt: 0.05
+decoder_type: direct_rollout_readout
 decoder_hidden_dim: 256
 hamiltonian_hidden_dim: 128
 lr: 0.001

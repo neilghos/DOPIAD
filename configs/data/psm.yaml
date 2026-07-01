@@ -7,4 +7,4 @@ val_split: 0.2
 scaler_mode: standard
 mask_rates: [0.05, 0.15, 0.30, 0.50]
 train_batch_size: 128
-eval_batch_size: 512
+eval_batch_size: 64
